@@ -313,7 +313,7 @@ impl Chunk {
                 // Set block
                 let blocks_per_i64 = (64f64 / *bits_per_block as f64).floor() as usize;
                 let index =
-                    ((y.abs() & 0xf) * 256 + (z.abs() & 0xf) * 16 + (x.abs() & 0xf)) as usize;
+                    ((y & 0xf) * 256 + (z & 0xf) * 16 + (x & 0xf)) as usize;
                 let i64_index = index / blocks_per_i64;
                 let packed_u64 =
                     data.get_mut(i64_index)
