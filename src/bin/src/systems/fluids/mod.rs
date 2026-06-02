@@ -927,7 +927,7 @@ mod tests {
         let result =
             ferrumc_utils::world::load_or_generate_chunk(global, water_pos.chunk(), TEST_DIM_NAME)
                 .expect("load chunk")
-                .get_block(water_pos.chunk_block_pos());
+                .get_block(lava_pos.chunk_block_pos());
 
         assert_eq!(
             result,
