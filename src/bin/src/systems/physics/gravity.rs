@@ -1,7 +1,9 @@
 use bevy_ecs::prelude::{Has, Query, Res, With};
+use bevy_math::IVec3;
 use ferrumc_core::transform::grounded::OnGround;
 use ferrumc_core::transform::position::Position;
 use ferrumc_core::transform::velocity::Velocity;
+use ferrumc_entities::components::{Baby, EntityMetadata, PhysicalRegistry};
 use ferrumc_entities::markers::{HasGravity, HasWaterDrag};
 use ferrumc_macros::match_block;
 use ferrumc_physics::GRAVITY_ACCELERATION;
@@ -17,13 +19,19 @@ type EntityQuery<'w, 's> = Query<
         &'static OnGround,
         &'static Position,
         Has<HasWaterDrag>,
+        Option<&'static EntityMetadata>,
+        Option<&'static Baby>,
     ),
     With<HasGravity>,
 >;
 
 // Just apply gravity to a mob's velocity. Application of velocity is handled elsewhere.
-pub(crate) fn handle(mut entities: EntityQuery, state: Res<GlobalStateResource>) {
-    for (mut vel, grounded, pos, is_water) in entities.iter_mut() {
+pub(crate) fn handle(
+    mut entities: EntityQuery,
+    state: Res<GlobalStateResource>,
+    registry: Option<Res<PhysicalRegistry>>,
+) {
+    for (mut vel, grounded, pos, is_water, metadata, baby) in entities.iter_mut() {
         if grounded.0 {
             continue;
         }
@@ -36,10 +44,27 @@ pub(crate) fn handle(mut entities: EntityQuery, state: Res<GlobalStateResource>)
 
             let feet_pos = pos.coords.as_ivec3();
 
-            let is_in_water = match_block!("water", chunk.get_block(ChunkBlockPos::from(feet_pos)));
+            // Check submersion at the body centre, the same point the water-drag system uses for
+            // buoyancy, so gravity stops exactly where buoyancy takes over. Checking the feet
+            // instead leaves a band — feet submerged but centre above the surface — in which neither
+            // gravity nor buoyancy acts, letting a mob drift upward indefinitely. Entities without
+            // metadata (e.g. in unit tests) fall back to the feet position.
+            let submersion_pos = metadata
+                .zip(registry.as_ref())
+                .and_then(|(m, reg)| reg.get(m.protocol_id(), baby.is_some()))
+                .map(|physical| {
+                    let center_y = pos.coords.y + (physical.bounding_box.height() / 2.0);
+                    IVec3::new(feet_pos.x, center_y as i32, feet_pos.z)
+                })
+                .unwrap_or(feet_pos);
 
-            // Only apply full gravity if NOT in water
-            if !is_in_water {
+            let is_submerged = match_block!(
+                "water",
+                chunk.get_block(ChunkBlockPos::from(submersion_pos))
+            );
+
+            // Only apply full gravity if NOT submerged at the centre.
+            if !is_submerged {
                 vel.vec += GRAVITY_ACCELERATION;
             }
         } else {
