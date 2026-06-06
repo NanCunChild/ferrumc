@@ -7,6 +7,8 @@ use ferrumc_core::transform::position::Position;
 use ferrumc_core::transform::rotation::Rotation;
 use ferrumc_core::transform::velocity::Velocity;
 use ferrumc_entities::components::combat::CombatProperties;
+use ferrumc_inventories::hotbar::Hotbar;
+use ferrumc_inventories::inventory::Inventory;
 use ferrumc_net::connection::StreamWriter;
 use ferrumc_net::packets::incoming::interact::InteractEntity;
 use ferrumc_net::packets::outgoing::hurt_animation::HurtAnimationPacket;
@@ -24,6 +26,8 @@ const KNOCKBACK_HOP: f32 = 0.4;
 /// attack within reach, but the server must not trust that: without this check a modified client
 /// could send `InteractEntity` for any entity id at any distance.
 const MAX_ATTACK_DISTANCE_SQUARED: f64 = 6.0 * 6.0;
+/// Damage dealt by a bare hand or any item that is not handled specially.
+const DEFAULT_ATTACK_DAMAGE: f32 = 1.0;
 
 type InteractEntityQuery<'w, 's> = Query<
     'w,
@@ -43,7 +47,7 @@ type InteractEntityQuery<'w, 's> = Query<
 pub fn handle(
     receiver: Res<InteractEntityReceiver>,
     mut entity_query: InteractEntityQuery,
-    attacker_query: Query<(&Position, &Rotation)>,
+    attacker_query: Query<(&Position, &Rotation, Option<&Hotbar>, Option<&Inventory>)>,
     conn_query: Query<(Entity, &StreamWriter)>,
     state: Res<GlobalStateResource>,
 ) {
@@ -75,7 +79,9 @@ pub fn handle(
                 continue;
             }
 
-            let Ok((attacker_pos, attacker_rot)) = attacker_query.get(attacker_eid) else {
+            let Ok((attacker_pos, attacker_rot, hotbar, inventory)) =
+                attacker_query.get(attacker_eid)
+            else {
                 continue;
             };
 
@@ -92,11 +98,11 @@ pub fn handle(
             // Mark entity as invulnerable for some amount of time after being attacked
             combat.set_default_invulnerability();
 
-            // Decrease health if the entity has a Health component
-            // TODO: Ensure death is handled when health reaches 0.
-            // TODO: Ensure the held item and armor is taken into account for damage calculation.
+            // Decrease health by the damage of the attacker's held item. Death is handled by the
+            // death system once health reaches zero.
+            // TODO: Account for armor and enchantments in the damage calculation.
             if let Some(ref mut health) = health {
-                health.current -= 1.0;
+                health.current -= held_item_damage(hotbar, inventory);
             }
 
             apply_knockback(
@@ -149,6 +155,32 @@ fn broadcast_hurt_animation(
         if let Err(e) = conn.send_packet_ref(&hurt_packet) {
             error!("Failed to send damage status packet: {}", e);
         }
+    }
+}
+
+/// Returns the melee damage of the attacker's currently selected hotbar item.
+///
+/// Swords deal their vanilla attack damage; a bare hand or any other item deals
+/// [`DEFAULT_ATTACK_DAMAGE`]. An attacker missing a hotbar or inventory (which should not happen for
+/// a player) also falls back to the default.
+fn held_item_damage(hotbar: Option<&Hotbar>, inventory: Option<&Inventory>) -> f32 {
+    let (Some(hotbar), Some(inventory)) = (hotbar, inventory) else {
+        return DEFAULT_ATTACK_DAMAGE;
+    };
+    let Ok(Some(slot)) = hotbar.get_selected_item(inventory) else {
+        return DEFAULT_ATTACK_DAMAGE;
+    };
+    let Some(item_id) = slot.item_id else {
+        return DEFAULT_ATTACK_DAMAGE;
+    };
+    match item_id.to_name().as_deref() {
+        Some("minecraft:wooden_sword") => 4.0,
+        Some("minecraft:golden_sword") => 4.0,
+        Some("minecraft:stone_sword") => 5.0,
+        Some("minecraft:iron_sword") => 6.0,
+        Some("minecraft:diamond_sword") => 7.0,
+        Some("minecraft:netherite_sword") => 8.0,
+        _ => DEFAULT_ATTACK_DAMAGE,
     }
 }
 
