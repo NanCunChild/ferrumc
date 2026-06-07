@@ -6,7 +6,7 @@ use ferrumc_core::transform::velocity::Velocity;
 use ferrumc_entities::components::{Baby, EntityMetadata, PhysicalRegistry};
 use ferrumc_entities::markers::{HasGravity, HasWaterDrag};
 use ferrumc_macros::match_block;
-use ferrumc_physics::GRAVITY_ACCELERATION;
+use ferrumc_physics::{GRAVITY_ACCELERATION, SUBMERGED_GRAVITY_FACTOR};
 use ferrumc_state::GlobalStateResource;
 use ferrumc_world::block_state_id::BlockStateId;
 use ferrumc_world::pos::{ChunkBlockPos, ChunkPos};
@@ -63,8 +63,12 @@ pub(crate) fn handle(
                 chunk.get_block(ChunkBlockPos::from(submersion_pos))
             );
 
-            // Only apply full gravity if NOT submerged at the centre.
-            if !is_submerged {
+            // A submerged entity is not weightless: buoyancy is a behaviour (see the
+            // swim-to-surface system), not a passive force, so it still sinks slowly under reduced
+            // gravity until something swims it back up. Outside the fluid it falls normally.
+            if is_submerged {
+                vel.vec += GRAVITY_ACCELERATION * SUBMERGED_GRAVITY_FACTOR;
+            } else {
                 vel.vec += GRAVITY_ACCELERATION;
             }
         } else {
@@ -220,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn test_water_entity_in_water_no_gravity() {
+    fn test_water_entity_in_water_reduced_gravity() {
         let mut world = World::new();
         let (state, _temp_dir) = create_test_state();
 
@@ -249,10 +253,14 @@ mod tests {
         // Run the gravity system
         schedule.run(&mut world);
 
+        // Submerged entities are not weightless — they sink slowly under reduced gravity rather
+        // than freezing in place, so a swim behaviour can later carry them back up.
         let vel = world.get::<Velocity>(entity).unwrap();
-        assert_eq!(
-            vel.vec.y, 0.0,
-            "Water entity should not have gravity applied when in water (drag system handles it)"
+        let expected = GRAVITY_ACCELERATION.y * SUBMERGED_GRAVITY_FACTOR;
+        assert!(
+            (vel.vec.y - expected).abs() < 1e-6,
+            "Water entity should sink under reduced gravity ({expected}), got {}",
+            vel.vec.y
         );
     }
 }
