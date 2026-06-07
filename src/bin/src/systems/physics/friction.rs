@@ -1,7 +1,7 @@
-use bevy_ecs::prelude::{Query, With};
+use bevy_ecs::prelude::{Query, With, Without};
 use ferrumc_core::transform::grounded::OnGround;
 use ferrumc_core::transform::velocity::Velocity;
-use ferrumc_entities::markers::HasGravity;
+use ferrumc_entities::markers::{HasGravity, HasLavaDrag, HasWaterDrag};
 
 const GROUND_FRICTION: f32 = 0.6;
 const AIR_FRICTION: f32 = 0.91;
@@ -9,11 +9,17 @@ const DRAG: f32 = 0.98;
 
 const STOP_THRESHOLD: f32 = 0.005;
 
-// Gated on `HasGravity` to stay consistent with the rest of the physics pipeline (gravity and water
-// drag are gated the same way). Friction is the companion to gravity: it damps the velocity that
-// gravity and knockback build up, so it applies to the same physical entities and leaves
-// non-physical ones (e.g. flying/swimming mobs spawned without gravity) untouched.
-pub fn handle(mut query: Query<(&mut Velocity, &OnGround), With<HasGravity>>) {
+type FrictionFilter = (
+    With<HasGravity>,
+    Without<HasWaterDrag>,
+    Without<HasLavaDrag>,
+);
+
+// Gated on `HasGravity` to stay consistent with the rest of the physics pipeline (gravity and drag
+// are gated the same way). Entities with fluid drag markers (HasWaterDrag, HasLavaDrag) are
+// excluded — the drag system handles their damping, including applying normal friction when they
+// are not submerged. This avoids double-applying friction on top of fluid drag.
+pub fn handle(mut query: Query<(&mut Velocity, &OnGround), FrictionFilter>) {
     for (mut vel, on_ground) in query.iter_mut() {
         let h_friction = if on_ground.0 {
             GROUND_FRICTION

@@ -1,12 +1,18 @@
 use crate::systems::physics::fluid::{fluid_at, Fluid};
 use bevy_ecs::prelude::{Has, Or, Query, Res, With};
 use bevy_math::{IVec3, Vec3A};
+use ferrumc_core::transform::grounded::OnGround;
 use ferrumc_core::transform::position::Position;
 use ferrumc_core::transform::velocity::Velocity;
 use ferrumc_entities::components::{Baby, EntityMetadata, PhysicalRegistry};
 use ferrumc_entities::markers::{HasLavaDrag, HasWaterDrag};
 use ferrumc_state::GlobalStateResource;
 use ferrumc_world::pos::ChunkPos;
+
+const GROUND_FRICTION: f32 = 0.6;
+const AIR_FRICTION: f32 = 0.91;
+const AIR_DRAG: f32 = 0.98;
+const STOP_THRESHOLD: f32 = 0.005;
 
 type DragQuery<'w, 's> = Query<
     'w,
@@ -15,6 +21,7 @@ type DragQuery<'w, 's> = Query<
         &'static mut Velocity,
         &'static Position,
         &'static EntityMetadata,
+        &'static OnGround,
         Option<&'static Baby>,
         Has<HasWaterDrag>,
         Has<HasLavaDrag>,
@@ -27,8 +34,8 @@ pub fn handle(
     state: Res<GlobalStateResource>,
     registry: Res<PhysicalRegistry>,
 ) {
-    for (mut vel, pos, metadata, baby, has_water_drag, has_lava_drag) in query.iter_mut() {
-        // Get physical properties from registry
+    for (mut vel, pos, metadata, on_ground, baby, has_water_drag, has_lava_drag) in query.iter_mut()
+    {
         let is_baby = baby.is_some();
         let Some(physical) = registry.get(metadata.protocol_id(), is_baby) else {
             continue;
@@ -37,16 +44,10 @@ pub fn handle(
         let chunk = ferrumc_utils::world::load_or_generate_mut(&state.0, chunk_pos, "overworld")
             .expect("Failed to load or generate chunk");
 
-        // Sample at the entity's body centre so it settles half-submerged at the surface rather
-        // than with its feet out of the fluid, matching the gravity and swim-to-surface systems.
         let feet_pos = pos.coords.as_ivec3();
         let center_y = pos.coords.y + (physical.bounding_box.height() / 2.0);
         let center_pos = IVec3::new(feet_pos.x, center_y as i32, feet_pos.z);
 
-        // Apply drag only for a fluid this entity actually interacts with: a lava-immune mob is not
-        // slowed by lava, and likewise for water. From LivingEntity.travel(), drag is applied per
-        // tick (0.8 in water, 0.5 in lava). Buoyancy is intentionally not applied here — rising is
-        // a behaviour (the swim-to-surface system), not a passive force.
         let drag = match fluid_at(&chunk, center_pos) {
             Some(Fluid::Water) if has_water_drag => Some(Fluid::Water.drag()),
             Some(Fluid::Lava) if has_lava_drag => Some(Fluid::Lava.drag()),
@@ -55,6 +56,29 @@ pub fn handle(
 
         if let Some(drag) = drag {
             **vel *= Vec3A::splat(drag);
+            // For submerged entities, fluid drag provides enough natural damping — no
+            // stop threshold is applied here. Applying it would zero the -0.004
+            // blocks/tick that reduced gravity produces through the drag multiplier,
+            // preventing non-swimming entities from ever sinking.
+        } else {
+            let h_friction = if on_ground.0 {
+                GROUND_FRICTION
+            } else {
+                AIR_FRICTION
+            };
+            vel.vec.x *= h_friction;
+            vel.vec.y *= AIR_DRAG;
+            vel.vec.z *= h_friction;
+
+            if vel.vec.x.abs() < STOP_THRESHOLD {
+                vel.vec.x = 0.0;
+            }
+            if vel.vec.y.abs() < STOP_THRESHOLD {
+                vel.vec.y = 0.0;
+            }
+            if vel.vec.z.abs() < STOP_THRESHOLD {
+                vel.vec.z = 0.0;
+            }
         }
     }
 }
@@ -100,6 +124,7 @@ mod tests {
                     coords: DVec3::new(0.0, 65.0, 0.0),
                 },
                 EntityMetadata::from_vanilla(&VanillaEntityType::PIG),
+                OnGround(false),
                 HasWaterDrag,
                 HasLavaDrag,
             ))

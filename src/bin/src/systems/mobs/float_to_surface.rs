@@ -46,8 +46,11 @@ pub fn float_to_surface(
         let center_pos = IVec3::new(feet_pos.x, center_y as i32, feet_pos.z);
 
         // Swim up in any fluid the body centre is submerged in (water or lava).
-        if fluid_at(&chunk, center_pos).is_some() {
-            vel.vec.y += SWIM_UP_FORCE;
+        // The swim impulse is multiplied by the fluid's drag factor to compensate for running after
+        // the physics pipeline — drag would otherwise damp this force only on the next tick, making
+        // it 25% stronger in water and 100% stronger in lava.
+        if let Some(fluid) = fluid_at(&chunk, center_pos) {
+            vel.vec.y += SWIM_UP_FORCE * fluid.drag();
         }
     }
 }
@@ -55,6 +58,7 @@ pub fn float_to_surface(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::systems::physics::fluid::Fluid;
     use bevy_ecs::prelude::*;
     use bevy_math::{DVec3, Vec3A};
     use ferrumc_data::generated::entities::EntityType as VanillaEntityType;
@@ -103,8 +107,8 @@ mod tests {
 
         let vel = world.get::<Velocity>(entity).unwrap();
         assert!(
-            (vel.vec.y - SWIM_UP_FORCE).abs() < 1e-6,
-            "submerged floater should gain {SWIM_UP_FORCE} upward velocity, got {}",
+            (vel.vec.y - SWIM_UP_FORCE * Fluid::Water.drag()).abs() < 1e-6,
+            "submerged floater should gain {SWIM_UP_FORCE} * water drag upward velocity, got {}",
             vel.vec.y
         );
     }
@@ -122,8 +126,8 @@ mod tests {
 
         let vel = world.get::<Velocity>(entity).unwrap();
         assert!(
-            (vel.vec.y - SWIM_UP_FORCE).abs() < 1e-6,
-            "a floater submerged in lava should swim up just like in water, got {}",
+            (vel.vec.y - SWIM_UP_FORCE * Fluid::Lava.drag()).abs() < 1e-6,
+            "a floater submerged in lava should swim up with lava-damped force, got {}",
             vel.vec.y
         );
     }
