@@ -54,3 +54,81 @@ pub fn float_to_surface(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy_ecs::prelude::*;
+    use bevy_math::{DVec3, Vec3A};
+    use ferrumc_data::generated::entities::EntityType as VanillaEntityType;
+    use ferrumc_macros::block;
+    use ferrumc_state::create_test_state;
+
+    /// Fills the chunk at `chunk_pos` entirely with water, or with air for a deterministic dry
+    /// chunk (generated terrain would otherwise be non-deterministic).
+    fn fill_chunk(state: &GlobalStateResource, chunk_pos: ChunkPos, water: bool) {
+        let mut chunk = ferrumc_utils::world::load_or_generate_mut(&state.0, chunk_pos, "overworld")
+            .expect("Failed to load or generate chunk");
+        if water {
+            chunk.fill(block!("water", { level: 0 }));
+        } else {
+            chunk.fill(block!("air"));
+        }
+    }
+
+    fn spawn_floater(world: &mut World) -> Entity {
+        world
+            .spawn((
+                Velocity { vec: Vec3A::ZERO },
+                Position {
+                    coords: DVec3::new(0.0, 65.0, 0.0),
+                },
+                EntityMetadata::from_vanilla(&VanillaEntityType::PIG),
+                CanFloat,
+            ))
+            .id()
+    }
+
+    fn run(world: &mut World) {
+        let mut schedule = Schedule::default();
+        schedule.add_systems(float_to_surface);
+        schedule.run(world);
+    }
+
+    #[test]
+    fn floats_up_when_submerged() {
+        let mut world = World::new();
+        let (state, _temp_dir) = create_test_state();
+        fill_chunk(&state, ChunkPos::new(0, 0), true);
+        world.insert_resource(state);
+        world.insert_resource(PhysicalRegistry::new());
+
+        let entity = spawn_floater(&mut world);
+        run(&mut world);
+
+        let vel = world.get::<Velocity>(entity).unwrap();
+        assert!(
+            (vel.vec.y - SWIM_UP_FORCE).abs() < 1e-6,
+            "submerged floater should gain {SWIM_UP_FORCE} upward velocity, got {}",
+            vel.vec.y
+        );
+    }
+
+    #[test]
+    fn does_not_float_out_of_water() {
+        let mut world = World::new();
+        let (state, _temp_dir) = create_test_state();
+        fill_chunk(&state, ChunkPos::new(0, 0), false);
+        world.insert_resource(state);
+        world.insert_resource(PhysicalRegistry::new());
+
+        let entity = spawn_floater(&mut world);
+        run(&mut world);
+
+        let vel = world.get::<Velocity>(entity).unwrap();
+        assert_eq!(
+            vel.vec.y, 0.0,
+            "a floater out of water should not gain upward velocity"
+        );
+    }
+}
