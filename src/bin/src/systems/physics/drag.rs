@@ -39,15 +39,15 @@ pub fn handle(
 
         if is_center_in_water {
             // Water drag for living entities (not items!)
-            // From LivingEntity.travelInWater(): multiply(slowDown, 0.8, slowDown)
+            // From LivingEntity.travel(): multiply(deltaMovement, 0.8, 0.8, 0.8)
             // slowDown = 0.8 for normal water movement (0.9 if sprinting)
             **vel *= Vec3A::splat(0.8);
 
-            // Buoyancy force - makes entities float up to the surface
-            // From LivingEntity.floatInWaterWhileRidden(): add(0.0, 0.04, 0.0)
-            // This is much stronger than item buoyancy (0.0005) and makes entities rise to surface
-            const BUOYANCY_FORCE: f32 = 0.04;
-            vel.y += BUOYANCY_FORCE;
+            // No general buoyancy here — the vanilla floatInWaterWhileRidden()
+            // add(0.0, 0.04, 0.0) is only for ridden/controlled entities.
+            // Gravity is suppressed for water-drag entities while submerged,
+            // so entities stay neutrally buoyant at their current depth unless
+            // pushed by external forces (swim input, knockback, AI, etc.).
         }
     }
 }

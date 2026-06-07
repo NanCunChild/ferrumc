@@ -44,11 +44,11 @@ pub(crate) fn handle(
 
             let feet_pos = pos.coords.as_ivec3();
 
-            // Check submersion at the body centre, the same point the water-drag system uses for
-            // buoyancy, so gravity stops exactly where buoyancy takes over. Checking the feet
-            // instead leaves a band — feet submerged but centre above the surface — in which neither
-            // gravity nor buoyancy acts, letting a mob drift upward indefinitely. Entities without
-            // metadata (e.g. in unit tests) fall back to the feet position.
+            // Check submersion at the body centre, the same point the water-drag system uses,
+            // so gravity stops exactly where water drag takes over. Checking the feet instead
+            // would leave a band — feet submerged but centre above the surface — in which neither
+            // gravity nor water drag acts, letting a mob move freely. Entities without metadata
+            // (e.g. in unit tests) fall back to the feet position.
             let submersion_pos = metadata
                 .zip(registry.as_ref())
                 .and_then(|(m, reg)| reg.get(m.protocol_id(), baby.is_some()))
