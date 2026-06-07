@@ -7,8 +7,24 @@ pub struct HasGravity;
 #[derive(Component)]
 pub struct HasWaterDrag;
 
+/// Marks an entity that lava drags and slows, the lava counterpart to [`HasWaterDrag`].
+///
+/// Lava is more viscous than water, so it damps motion harder (see the drag system). Lava-native
+/// entities that move freely through it (for example the strider) omit this marker.
+#[derive(Component)]
+pub struct HasLavaDrag;
+
 #[derive(Component)]
 pub struct HasCollisions;
+
+/// Marks an entity that actively swims toward the surface when submerged.
+///
+/// This is a behaviour flag, not a physics flag: buoyancy is never applied by the physics layer,
+/// so an entity only rises out of water if it carries this marker and is handled by the
+/// swim-to-surface behaviour. Entities that should sink instead (for example the iron golem)
+/// simply omit it.
+#[derive(Component)]
+pub struct CanFloat;
 
 // Entity types
 pub mod entity_types {

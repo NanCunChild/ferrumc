@@ -31,10 +31,16 @@ pub fn handle(
 ) {
     for (eid, mut vel, mut pos, metadata, is_baby, mut grounded) in query {
         if pos.is_changed() || vel.is_changed() {
-            // Get physical properties from registry
             let Some(physical) = registry.get(metadata.protocol_id(), is_baby) else {
                 continue;
             };
+
+            // Reset grounded at the start of each collision check so an entity that was
+            // previously on a solid block (e.g. the lake bed) and has since swum or been
+            // knocked away correctly loses its grounded flag. Without this, gravity is
+            // permanently skipped once the entity touches a solid surface, even after
+            // the entity leaves it, causing entities to fly up out of water indefinitely.
+            grounded.0 = false;
 
             // Figure out where the entity is going to be next tick
             let next_pos = pos.coords.as_vec3a() + **vel;
