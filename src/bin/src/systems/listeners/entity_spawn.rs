@@ -5,16 +5,16 @@ use ferrumc_core::transform::rotation::Rotation;
 use ferrumc_entities::bundles::*;
 use ferrumc_entities::components::EntityMetadata;
 use ferrumc_entities::markers::entity_types::*;
-use ferrumc_entities::markers::{CanFloat, HasCollisions, HasGravity, HasWaterDrag};
+use ferrumc_entities::markers::{CanFloat, HasCollisions, HasGravity, HasLavaDrag, HasWaterDrag};
 use ferrumc_messages::{EntityType, SpawnEntityCommand, SpawnEntityEvent};
 use ferrumc_net::connection::StreamWriter;
 use ferrumc_net::packets::outgoing::spawn_entity::SpawnEntityPacket;
 use tracing::{error, warn};
 
-/// Macro for spawning ground entities (gravity + collisions + water drag + swim-to-surface)
+/// Macro for spawning ground entities (gravity + collisions + water/lava drag + swim-to-surface)
 ///
-/// These mobs swim back up when submerged, matching vanilla's `FloatGoal`. Use
-/// `spawn_sinking_ground_entity!` for the rare ground mob that should sink instead.
+/// These mobs are dragged by both fluids and swim back up when submerged, matching vanilla's
+/// `FloatGoal`. Use `spawn_sinking_ground_entity!` for the rare ground mob that should sink instead.
 macro_rules! spawn_ground_entity {
     ($commands:expr, $position:expr, $Bundle:ident, $Marker:ident) => {{
         let entity = $commands
@@ -24,6 +24,7 @@ macro_rules! spawn_ground_entity {
                 HasGravity,
                 HasCollisions,
                 HasWaterDrag,
+                HasLavaDrag,
                 CanFloat,
             ))
             .id();
@@ -36,7 +37,7 @@ macro_rules! spawn_ground_entity {
 /// Macro for spawning ground entities that sink instead of floating (e.g. the iron golem).
 ///
 /// Identical to `spawn_ground_entity!` but omits the `CanFloat` marker, so the swim-to-surface
-/// behaviour leaves these mobs alone and they stay submerged.
+/// behaviour leaves these mobs alone and they stay submerged. They are still dragged by fluids.
 macro_rules! spawn_sinking_ground_entity {
     ($commands:expr, $position:expr, $Bundle:ident, $Marker:ident) => {{
         let entity = $commands
@@ -46,6 +47,7 @@ macro_rules! spawn_sinking_ground_entity {
                 HasGravity,
                 HasCollisions,
                 HasWaterDrag,
+                HasLavaDrag,
             ))
             .id();
         $commands.queue(move |world: &mut World| {

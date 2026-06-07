@@ -1,15 +1,14 @@
+use crate::systems::physics::fluid::{fluid_at, Fluid};
 use bevy_ecs::prelude::{Has, Query, Res, With};
 use bevy_math::IVec3;
 use ferrumc_core::transform::grounded::OnGround;
 use ferrumc_core::transform::position::Position;
 use ferrumc_core::transform::velocity::Velocity;
 use ferrumc_entities::components::{Baby, EntityMetadata, PhysicalRegistry};
-use ferrumc_entities::markers::{HasGravity, HasWaterDrag};
-use ferrumc_macros::match_block;
+use ferrumc_entities::markers::{HasGravity, HasLavaDrag, HasWaterDrag};
 use ferrumc_physics::{GRAVITY_ACCELERATION, SUBMERGED_GRAVITY_FACTOR};
 use ferrumc_state::GlobalStateResource;
-use ferrumc_world::block_state_id::BlockStateId;
-use ferrumc_world::pos::{ChunkBlockPos, ChunkPos};
+use ferrumc_world::pos::ChunkPos;
 
 type EntityQuery<'w, 's> = Query<
     'w,
@@ -19,6 +18,7 @@ type EntityQuery<'w, 's> = Query<
         &'static OnGround,
         &'static Position,
         Has<HasWaterDrag>,
+        Has<HasLavaDrag>,
         Option<&'static EntityMetadata>,
         Option<&'static Baby>,
     ),
@@ -31,12 +31,12 @@ pub(crate) fn handle(
     state: Res<GlobalStateResource>,
     registry: Option<Res<PhysicalRegistry>>,
 ) {
-    for (mut vel, grounded, pos, is_water, metadata, baby) in entities.iter_mut() {
+    for (mut vel, grounded, pos, is_water, is_lava, metadata, baby) in entities.iter_mut() {
         if grounded.0 {
             continue;
         }
 
-        if is_water {
+        if is_water || is_lava {
             let chunk_pos = ChunkPos::from(pos.coords);
             let chunk =
                 ferrumc_utils::world::load_or_generate_mut(&state.0, chunk_pos, "overworld")
@@ -44,11 +44,11 @@ pub(crate) fn handle(
 
             let feet_pos = pos.coords.as_ivec3();
 
-            // Check submersion at the body centre, the same point the water-drag system uses,
-            // so gravity stops exactly where water drag takes over. Checking the feet instead
-            // would leave a band — feet submerged but centre above the surface — in which neither
-            // gravity nor water drag acts, letting a mob move freely. Entities without metadata
-            // (e.g. in unit tests) fall back to the feet position.
+            // Check submersion at the body centre, the same point the drag system uses, so gravity
+            // changes over exactly where drag takes over. Checking the feet instead would leave a
+            // band — feet submerged but centre above the surface — in which neither acts, letting a
+            // mob move freely. Entities without metadata (e.g. in unit tests) fall back to the feet
+            // position.
             let submersion_pos = metadata
                 .zip(registry.as_ref())
                 .and_then(|(m, reg)| reg.get(m.protocol_id(), baby.is_some()))
@@ -58,10 +58,13 @@ pub(crate) fn handle(
                 })
                 .unwrap_or(feet_pos);
 
-            let is_submerged = match_block!(
-                "water",
-                chunk.get_block(ChunkBlockPos::from(submersion_pos))
-            );
+            // Submerged only counts for a fluid this entity interacts with, so a lava-immune mob
+            // still falls normally through lava and likewise for water.
+            let is_submerged = match fluid_at(&chunk, submersion_pos) {
+                Some(Fluid::Water) => is_water,
+                Some(Fluid::Lava) => is_lava,
+                None => false,
+            };
 
             // A submerged entity is not weightless: buoyancy is a behaviour (see the
             // swim-to-surface system), not a passive force, so it still sinks slowly under reduced
@@ -89,6 +92,7 @@ mod tests {
     use ferrumc_entities::markers::HasGravity;
     use ferrumc_macros::block;
     use ferrumc_state::create_test_state;
+    use ferrumc_world::block_state_id::BlockStateId;
 
     /// Creates a chunk with water blocks at the specified positions
     /// This helper function is used to set up test scenarios where entities are in water

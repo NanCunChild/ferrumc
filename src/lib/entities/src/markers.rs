@@ -7,6 +7,13 @@ pub struct HasGravity;
 #[derive(Component)]
 pub struct HasWaterDrag;
 
+/// Marks an entity that lava drags and slows, the lava counterpart to [`HasWaterDrag`].
+///
+/// Lava is more viscous than water, so it damps motion harder (see the drag system). Lava-native
+/// entities that move freely through it (for example the strider) omit this marker.
+#[derive(Component)]
+pub struct HasLavaDrag;
+
 #[derive(Component)]
 pub struct HasCollisions;
 

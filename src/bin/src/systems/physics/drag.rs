@@ -1,23 +1,33 @@
-use bevy_ecs::prelude::{Query, Res, With};
+use crate::systems::physics::fluid::{fluid_at, Fluid};
+use bevy_ecs::prelude::{Has, Or, Query, Res, With};
 use bevy_math::{IVec3, Vec3A};
 use ferrumc_core::transform::position::Position;
 use ferrumc_core::transform::velocity::Velocity;
 use ferrumc_entities::components::{Baby, EntityMetadata, PhysicalRegistry};
-use ferrumc_entities::markers::HasWaterDrag;
-use ferrumc_macros::match_block;
+use ferrumc_entities::markers::{HasLavaDrag, HasWaterDrag};
 use ferrumc_state::GlobalStateResource;
-use ferrumc_world::block_state_id::BlockStateId;
-use ferrumc_world::pos::{ChunkBlockPos, ChunkPos};
+use ferrumc_world::pos::ChunkPos;
+
+type DragQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Velocity,
+        &'static Position,
+        &'static EntityMetadata,
+        Option<&'static Baby>,
+        Has<HasWaterDrag>,
+        Has<HasLavaDrag>,
+    ),
+    Or<(With<HasWaterDrag>, With<HasLavaDrag>)>,
+>;
 
 pub fn handle(
-    mut query: Query<
-        (&mut Velocity, &Position, &EntityMetadata, Option<&Baby>),
-        With<HasWaterDrag>,
-    >,
+    mut query: DragQuery,
     state: Res<GlobalStateResource>,
     registry: Res<PhysicalRegistry>,
 ) {
-    for (mut vel, pos, metadata, baby) in query.iter_mut() {
+    for (mut vel, pos, metadata, baby, has_water_drag, has_lava_drag) in query.iter_mut() {
         // Get physical properties from registry
         let is_baby = baby.is_some();
         let Some(physical) = registry.get(metadata.protocol_id(), is_baby) else {
@@ -27,27 +37,100 @@ pub fn handle(
         let chunk = ferrumc_utils::world::load_or_generate_mut(&state.0, chunk_pos, "overworld")
             .expect("Failed to load or generate chunk");
 
-        // Check if the entity's center (middle of body) is in water
-        // This makes entities float with their body half-submerged instead of feet out of water
+        // Sample at the entity's body centre so it settles half-submerged at the surface rather
+        // than with its feet out of the fluid, matching the gravity and swim-to-surface systems.
         let feet_pos = pos.coords.as_ivec3();
-        let entity_height = physical.bounding_box.height();
-        let center_y = pos.coords.y + (entity_height / 2.0);
+        let center_y = pos.coords.y + (physical.bounding_box.height() / 2.0);
         let center_pos = IVec3::new(feet_pos.x, center_y as i32, feet_pos.z);
 
-        let is_center_in_water =
-            match_block!("water", chunk.get_block(ChunkBlockPos::from(center_pos)));
+        // Apply drag only for a fluid this entity actually interacts with: a lava-immune mob is not
+        // slowed by lava, and likewise for water. From LivingEntity.travel(), drag is applied per
+        // tick (0.8 in water, 0.5 in lava). Buoyancy is intentionally not applied here — rising is
+        // a behaviour (the swim-to-surface system), not a passive force.
+        let drag = match fluid_at(&chunk, center_pos) {
+            Some(Fluid::Water) if has_water_drag => Some(Fluid::Water.drag()),
+            Some(Fluid::Lava) if has_lava_drag => Some(Fluid::Lava.drag()),
+            _ => None,
+        };
 
-        if is_center_in_water {
-            // Water drag for living entities (not items!)
-            // From LivingEntity.travel(): multiply(deltaMovement, 0.8, 0.8, 0.8)
-            // slowDown = 0.8 for normal water movement (0.9 if sprinting)
-            **vel *= Vec3A::splat(0.8);
-
-            // No general buoyancy here — the vanilla floatInWaterWhileRidden()
-            // add(0.0, 0.04, 0.0) is only for ridden/controlled entities.
-            // Gravity is suppressed for water-drag entities while submerged,
-            // so entities stay neutrally buoyant at their current depth unless
-            // pushed by external forces (swim input, knockback, AI, etc.).
+        if let Some(drag) = drag {
+            **vel *= Vec3A::splat(drag);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy_ecs::prelude::*;
+    use bevy_math::DVec3;
+    use ferrumc_data::generated::entities::EntityType as VanillaEntityType;
+    use ferrumc_macros::block;
+    use ferrumc_state::create_test_state;
+    use ferrumc_world::block_state_id::BlockStateId;
+
+    enum ChunkFill {
+        Water,
+        Lava,
+    }
+
+    fn fill_chunk(state: &GlobalStateResource, chunk_pos: ChunkPos, fill: ChunkFill) {
+        let mut chunk =
+            ferrumc_utils::world::load_or_generate_mut(&state.0, chunk_pos, "overworld")
+                .expect("Failed to load or generate chunk");
+        match fill {
+            ChunkFill::Water => chunk.fill(block!("water", { level: 0 })),
+            ChunkFill::Lava => chunk.fill(block!("lava", { level: 0 })),
+        }
+    }
+
+    fn run_drag(fill: ChunkFill) -> f32 {
+        let mut world = World::new();
+        let (state, _temp_dir) = create_test_state();
+        fill_chunk(&state, ChunkPos::new(0, 0), fill);
+        world.insert_resource(state);
+        world.insert_resource(PhysicalRegistry::new());
+
+        let entity = world
+            .spawn((
+                Velocity {
+                    vec: Vec3A::splat(1.0),
+                },
+                Position {
+                    coords: DVec3::new(0.0, 65.0, 0.0),
+                },
+                EntityMetadata::from_vanilla(&VanillaEntityType::PIG),
+                HasWaterDrag,
+                HasLavaDrag,
+            ))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(handle);
+        schedule.run(&mut world);
+
+        world.get::<Velocity>(entity).unwrap().vec.x
+    }
+
+    #[test]
+    fn water_drag_is_applied() {
+        assert!(
+            (run_drag(ChunkFill::Water) - Fluid::Water.drag()).abs() < 1e-6,
+            "submerged entity should be slowed by the water drag multiplier"
+        );
+    }
+
+    #[test]
+    fn lava_drag_is_stronger_than_water() {
+        let lava = run_drag(ChunkFill::Lava);
+        assert!(
+            (lava - Fluid::Lava.drag()).abs() < 1e-6,
+            "submerged entity should be slowed by the lava drag multiplier"
+        );
+        // A smaller remaining velocity means more was removed: lava is more viscous than water.
+        assert!(
+            lava < run_drag(ChunkFill::Water),
+            "lava should damp motion harder than water"
+        );
     }
 }
