@@ -10,6 +10,15 @@ pub struct HasWaterDrag;
 #[derive(Component)]
 pub struct HasCollisions;
 
+/// Marks an entity that actively swims toward the surface when submerged.
+///
+/// This is a behaviour flag, not a physics flag: buoyancy is never applied by the physics layer,
+/// so an entity only rises out of water if it carries this marker and is handled by the
+/// swim-to-surface behaviour. Entities that should sink instead (for example the iron golem)
+/// simply omit it.
+#[derive(Component)]
+pub struct CanFloat;
+
 // Entity types
 pub mod entity_types {
     use super::Component;
